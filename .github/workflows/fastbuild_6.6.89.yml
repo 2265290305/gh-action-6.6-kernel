@@ -94,6 +94,21 @@ on:
         required: true
         type: boolean
         default: 'false'
+      kma_enable:
+        description: '是否额外编译 kma 内核模块并上传 .ko 工件'
+        required: true
+        type: boolean
+        default: 'false'
+      kma_repo:
+        description: 'kma 模块仓库(owner/repo；私有仓库需配置 KMA_REPO_TOKEN)'
+        required: false
+        type: string
+        default: '2265290305/kma'
+      kma_branch:
+        description: 'kma 模块分支'
+        required: false
+        type: string
+        default: '6.6'
       kernel_suffix:
         description: '内核后缀(留空默认,开头别加连字符,勿加空格等影响指令运行的保留字符)'
         required: false
@@ -706,6 +721,57 @@ jobs:
           path: ${{ env.CCACHE_DIR }}
           key: ${{ env.CCACHE_REAL_KEY }}-${{ runner.os }}-${{ github.ref_name }}
          
+
+      - name: 编译 kma 外部内核模块
+        if: inputs.kma_enable
+        run: |
+          WORKDIR="$(pwd)"
+          export PATH="/usr/lib/ccache:$PATH"
+          export PATH="$WORKDIR/kernel_workspace/clang18/bin:$PATH"
+          export PATH="$WORKDIR/kernel_workspace/build-tools/bin:$PATH"
+          cd kernel_workspace
+
+          echo "准备编译 kma 模块..."
+          echo "模块仓库: ${{ github.event.inputs.kma_repo }}"
+          echo "模块分支: ${{ github.event.inputs.kma_branch }}"
+
+          if [[ -n "${{ secrets.KMA_REPO_TOKEN }}" ]]; then
+            MODULE_REPO_URL="https://x-access-token:${{ secrets.KMA_REPO_TOKEN }}@github.com/${{ github.event.inputs.kma_repo }}.git"
+          else
+            MODULE_REPO_URL="https://github.com/${{ github.event.inputs.kma_repo }}.git"
+          fi
+
+          rm -rf ./kma ./module_artifacts
+          git clone --depth=1 -b "${{ github.event.inputs.kma_branch }}" "$MODULE_REPO_URL" ./kma
+
+          make -C ./kma \
+            KDIR="$WORKDIR/kernel_workspace/common/out" \
+            LLVM="$WORKDIR/kernel_workspace/clang18/bin/" \
+            PAHOLE="$WORKDIR/kernel_workspace/build-tools/bin/pahole" \
+            ARCH=arm64
+
+          mkdir -p ./module_artifacts
+          find ./kma -maxdepth 1 -type f \( -name '*.ko' -o -name 'Module.symvers' -o -name '*.mod' -o -name '*.order' \) -exec cp -f {} ./module_artifacts/ \;
+          if [[ ! -f ./module_artifacts/Shanzi.ko ]]; then
+            echo "未找到 Shanzi.ko，模块编译失败"
+            exit 1
+          fi
+
+          if [[ -n "${{ github.event.inputs.kernel_suffix }}" ]]; then
+            MODULE_KERNEL_VERSION="${{ env.KERNEL_VERSION }}.${{ env.SUB_VERSION }}-${{ github.event.inputs.kernel_suffix }}"
+          else
+            MODULE_KERNEL_VERSION="${{ env.KERNEL_VERSION }}.${{ env.SUB_VERSION }}-${{ env.KERNEL_NAME }}"
+          fi
+          sha256sum ./module_artifacts/* > ./module_artifacts/SHA256SUMS
+          {
+            echo "module_repo=${{ github.event.inputs.kma_repo }}"
+            echo "module_branch=${{ github.event.inputs.kma_branch }}"
+            echo "kernel_version=${MODULE_KERNEL_VERSION}"
+            echo "run_id=${GITHUB_RUN_ID}"
+            echo "commit=${GITHUB_SHA}"
+          } > ./module_artifacts/build-info.txt
+          ls -lh ./module_artifacts
+
       - name: 应用KPM并修补内核
         run: |
           if [[ ${{ github.event.inputs.kpm_enable }} == 'builtin' && ( "${{ github.event.inputs.ksu_type }}" == "sukisu" || "${{ github.event.inputs.ksu_type }}" == "resukisu" ) ]]; then
@@ -800,6 +866,15 @@ jobs:
           name: ccache-debug-log
           path: ${{ github.workspace }}/kernel_workspace/ccache.log
           archive: true
+
+
+      - name: 上传 kma 模块工件
+        if: inputs.kma_enable
+        uses: actions/upload-artifact@v7
+        with:
+          name: kma-module-${{ env.KERNEL_VERSION }}.${{ env.SUB_VERSION }}
+          path: ${{ github.workspace }}/kernel_workspace/module_artifacts/*
+          archive: false
 
       - name: 上传 ZIP 工件
         uses: actions/upload-artifact@v7
