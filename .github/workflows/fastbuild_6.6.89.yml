@@ -703,6 +703,11 @@ jobs:
           sudo rm -rf /opt/hostedtoolcache/CodeQL &
           make -j$(nproc --all) LLVM=1 ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- CC="ccache clang" LD="ld.lld" HOSTLD=ld.lld O=out KCFLAGS+=-O2 KCFLAGS+=-Wno-error gki_defconfig &&
           make -j$(nproc --all) LLVM=1 ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- CC="$(pwd)/cc-wrapper" LD="$(pwd)/ld-wrapper" HOSTLD=ld.lld O=out KCFLAGS+=-O2 KCFLAGS+=-Wno-error Image
+          if [[ "${{ github.event.inputs.kma_enable }}" == "true" ]]; then
+            echo "正在生成外部模块所需的 Module.symvers..."
+            make -j$(nproc --all) LLVM=1 ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- CC="$(pwd)/cc-wrapper" LD="$(pwd)/ld-wrapper" HOSTLD=ld.lld O=out KCFLAGS+=-O2 KCFLAGS+=-Wno-error modules
+            ls -lh out/Module.symvers
+          fi
           
           # 编译后时间劫持二次校验
           echo "--- 编译后环境时间: $(LD_PRELOAD=$PRELOAD_LIBS date) ---"
@@ -743,6 +748,11 @@ jobs:
 
           rm -rf ./kma ./module_artifacts
           git clone --depth=1 -b "${{ github.event.inputs.kma_branch }}" "$MODULE_REPO_URL" ./kma
+
+          if [[ ! -f "$WORKDIR/kernel_workspace/common/out/Module.symvers" ]]; then
+            echo "缺少 $WORKDIR/kernel_workspace/common/out/Module.symvers，无法进行外部模块 modpost"
+            exit 1
+          fi
 
           make -C ./kma \
             KDIR="$WORKDIR/kernel_workspace/common/out" \
