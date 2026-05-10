@@ -884,7 +884,7 @@ jobs:
         with:
           name: kma-module-${{ env.KERNEL_VERSION }}.${{ env.SUB_VERSION }}
           path: ${{ github.workspace }}/kernel_workspace/module_artifacts/*
-          archive: false
+          archive: true
 
       - name: 上传 ZIP 工件
         uses: actions/upload-artifact@v7
